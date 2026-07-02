@@ -47,7 +47,7 @@ export const api = {
     request<{ ok: boolean; passkeyKeyId?: string; smartWalletAddress?: string }>("/kyc/verify-pin", { method: "POST", body: JSON.stringify(input) }),
 
   getAccount: (wallet: string) =>
-    request<{ email: string; name: string | null; phone: string | null; bvnVerified: boolean }>(
+    request<{ email: string; bvnVerified: boolean }>(
       `/kyc/account?wallet=${encodeURIComponent(wallet)}`),
 
   reissueSalt: (input: { email: string; pin: string }) =>

@@ -24,7 +24,7 @@ afterEach(async () => {
 });
 
 describe('POST /kyc/submit-bvn (email-keyed)', () => {
-  it('upgrades a user by email, returns the BVN legal name + secret salt', async () => {
+  it('upgrades a user by email, returns the BVN legal name + secret salt — but never stores it (zero-storage)', async () => {
     const email = `bvn_${Date.now()}@test.com`;
     emails.push(email);
     await request(app).post('/kyc/link-wallet').send({
@@ -37,8 +37,11 @@ describe('POST /kyc/submit-bvn (email-keyed)', () => {
     expect(res.body.returnedName.length).toBeGreaterThan(0);
     expect(typeof res.body.secretSalt).toBe('string');
     expect(typeof res.body.merkleRoot).toBe('string');
+    // The legal name and phone are handed back for the frontend to cache client-side, but the
+    // User row itself has no columns to persist them in at all — zero-storage by construction.
     const u = await prisma.user.findUnique({ where: { email } });
-    expect(u?.name).toBe(res.body.returnedName);
+    expect(u && 'name' in u).toBe(false);
+    expect(u && 'phone' in u).toBe(false);
   });
 
   it('rejects a malformed BVN with 400', async () => {

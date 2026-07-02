@@ -8,11 +8,13 @@ datasource db {
   provider = "postgresql"
 }
 
+// Zero-storage: no name/phone fields on purpose. The BVN check's returned legal name and any
+// submitted phone number are never persisted server-side — only bvnVerified (a boolean, in
+// ComplianceAttestation) survives the request. Identity data the app doesn't need to keep, it
+// doesn't keep.
 model User {
   id                 String   @id @default(uuid())
   email              String   @unique
-  name               String?
-  phone              String?
   walletAddress      String?  @unique
   smartWalletAddress String?  @unique
   passkeyKeyId       String?

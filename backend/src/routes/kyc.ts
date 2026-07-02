@@ -165,10 +165,16 @@ router.get('/faucet-status', async (req, res) => {
 });
 
 // ── Tier 2: BVN upgrade ──
-// Triggered when a user wants to swap above the high-value threshold. Verifies the BVN, records the
-// legal name, and issues a NEW compliance leaf with bvnVerified = true. Returns the new secret salt.
+// Triggered when a user wants to swap above the high-value threshold. Verifies the BVN and issues
+// a NEW compliance leaf with bvnVerified = true. Returns the new secret salt.
+//
+// Zero-storage: the legal name the BVN check returns, and the phone number submitted with it,
+// are NEVER written to the User row — only the boolean bvnVerified flag persists (in
+// ComplianceAttestation, via issueLeaf below). `returnedName` is handed back in the response for
+// the frontend to cache client-side (session.name), exactly like the app already treats bank
+// details — it lives in the browser, not the database.
 router.post('/submit-bvn', async (req, res) => {
-  const { email, phone, bvn } = req.body;
+  const { email, bvn } = req.body;
   if (!email || typeof email !== 'string') return res.status(400).json({ error: 'email is required.' });
   if (!bvn || bvn.length !== 11 || !/^\d{11}$/.test(bvn)) {
     return res.status(400).json({ error: 'A valid 11-digit numeric BVN is required.' });
@@ -180,11 +186,6 @@ router.post('/submit-bvn', async (req, res) => {
 
     const check = await verifyBvn(bvn);
     if (!check.ok) return res.status(400).json({ error: 'BVN verification failed.' });
-
-    await prisma.user.update({
-      where: { id: user.id },
-      data: { name: check.returnedName, phone: phone ?? user.phone ?? undefined },
-    });
 
     // Tier 2 leaf: hardware-attested AND BVN-verified.
     const leaf = await issueLeaf(user.id, true, true);
@@ -262,7 +263,7 @@ router.get('/account', async (req, res) => {
   if (!wallet) return res.status(400).json({ error: 'wallet query param is required.' });
   const user = await prisma.user.findUnique({ where: { smartWalletAddress: wallet }, include: { attestation: true } });
   if (!user) return res.status(404).json({ error: 'No account for that wallet.' });
-  return res.json({ email: user.email, name: user.name, phone: user.phone, bvnVerified: user.attestation?.bvnVerified ?? false });
+  return res.json({ email: user.email, bvnVerified: user.attestation?.bvnVerified ?? false });
 });
 
 export default router;
