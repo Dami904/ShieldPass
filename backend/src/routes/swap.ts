@@ -9,6 +9,7 @@ import { notify } from './notifications';
 import { getQuote, TIER2_THRESHOLD_NAIRA, type Quote } from '../services/quote';
 import { initiateTransfer as initiateLencoTransfer, resolveAccount, getBanks, type LencoTransferResult } from '../services/lenco';
 import { initiatePaystackTransfer } from '../services/paystack';
+import { accountLookupLimiter } from '../middleware/rateLimit';
 
 const router = Router();
 
@@ -66,7 +67,7 @@ router.get('/banks', async (_req, res) => {
 
 // POST /swap/resolve-account - name enquiry: resolve account number + bank code to the account
 // holder's name so the user can confirm the recipient BEFORE paying (prevents wrong-account payouts).
-router.post('/resolve-account', async (req, res) => {
+router.post('/resolve-account', accountLookupLimiter, async (req, res) => {
   const { accountNumber, bankCode } = req.body;
   if (!/^\d{10}$/.test(String(accountNumber || ''))) return res.status(400).json({ error: 'A valid 10-digit account number is required.' });
   if (!bankCode) return res.status(400).json({ error: 'bankCode is required.' });

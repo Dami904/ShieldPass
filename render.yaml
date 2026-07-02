@@ -47,6 +47,10 @@ services:
       # USDC shielded pool (enables shielded USDC). Non-secret contract id.
       - key: USDC_POOL_CONTRACT_ID
         value: CCRQD3ALTYX5GMSQA5GDN65CF3DPLLHPWOOKHQOKRDO3JNK3FVYDM7ZP
+      # Set to the deployed frontend origin(s), comma-separated (e.g. https://shieldpass.vercel.app).
+      # Left unset here since it depends on your Vercel deployment; set it in the Render dashboard.
+      - key: CORS_ORIGIN
+        sync: false
       # Secrets — set these in the Render dashboard (sync: false keeps them out of the repo)
       - key: NEON_CONNECTION_STRING
         sync: false

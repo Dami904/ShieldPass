@@ -15,3 +15,29 @@ export function verifyPin(pin: string, stored: string): boolean {
   const actual = scryptSync(pin, salt, 32);
   return expected.length === actual.length && timingSafeEqual(expected, actual);
 }
+
+const MAX_PIN_ATTEMPTS = 5;
+const PIN_LOCKOUT_MS = 15 * 60 * 1000;
+
+export interface PinLockState {
+  failedPinAttempts: number;
+  pinLockedUntil: Date | null;
+}
+
+/** The lock's expiry if one is currently active, otherwise null. Pure — takes `now` for tests. */
+export function activePinLock(state: PinLockState, now = new Date()): Date | null {
+  return state.pinLockedUntil && state.pinLockedUntil > now ? state.pinLockedUntil : null;
+}
+
+/** Next persisted state after a failed PIN attempt — locks once MAX_PIN_ATTEMPTS is reached. */
+export function recordFailedPinAttempt(state: PinLockState, now = new Date()): PinLockState {
+  const failedPinAttempts = state.failedPinAttempts + 1;
+  const pinLockedUntil =
+    failedPinAttempts >= MAX_PIN_ATTEMPTS ? new Date(now.getTime() + PIN_LOCKOUT_MS) : state.pinLockedUntil;
+  return { failedPinAttempts, pinLockedUntil };
+}
+
+/** Next persisted state after a successful PIN check — clears the counter and any lock. */
+export function clearPinLock(): PinLockState {
+  return { failedPinAttempts: 0, pinLockedUntil: null };
+}

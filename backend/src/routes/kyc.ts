@@ -7,8 +7,9 @@ const toHex = (u8: Uint8Array) => Buffer.from(u8).toString('hex');
 import { treeService } from '../services/tree';
 import { notify } from './notifications';
 import { verifyBvn } from '../services/bvn';
-import { hashPin, verifyPin } from '../services/pin';
+import { hashPin, verifyPin, activePinLock, recordFailedPinAttempt, clearPinLock } from '../services/pin';
 import { seedWalletFromEnv, type SeedResult } from '../services/seed';
+import { pinLimiter } from '../middleware/rateLimit';
 
 const router = Router();
 const issuer = new TrustedIssuer();
@@ -202,14 +203,27 @@ router.post('/submit-bvn', async (req, res) => {
 });
 
 // Verify a returning user's PIN (second factor for passkey reconnect).
-router.post('/verify-pin', async (req, res) => {
+// How long a caller has to wait before the lockout on their account clears.
+function retryAfterSeconds(lockedUntil: Date): number {
+  return Math.max(1, Math.ceil((lockedUntil.getTime() - Date.now()) / 1000));
+}
+
+router.post('/verify-pin', pinLimiter, async (req, res) => {
   const { email, pin } = req.body;
   if (!email || !pin) return res.status(400).json({ error: 'email and pin are required.' });
   const user = await prisma.user.findUnique({ where: { email } });
   if (!user) return res.status(404).json({ error: 'No user for that email.' });
+
+  const lockedUntil = activePinLock(user);
+  if (lockedUntil) {
+    return res.status(429).json({ error: 'Too many incorrect attempts. Try again later.', retryAfterSeconds: retryAfterSeconds(lockedUntil) });
+  }
+
   const ok = !!user.pinHash && verifyPin(String(pin), user.pinHash);
-  return res.json({ 
-    ok, 
+  await prisma.user.update({ where: { id: user.id }, data: ok ? clearPinLock() : recordFailedPinAttempt(user) });
+
+  return res.json({
+    ok,
     passkeyKeyId: ok ? user.passkeyKeyId : undefined,
     smartWalletAddress: ok ? user.smartWalletAddress : undefined
   });
@@ -217,13 +231,21 @@ router.post('/verify-pin', async (req, res) => {
 
 // Re-issue a fresh compliance secret salt for a returning user (login on a new device).
 // Preserves the user's current Tier (hardwareAttested / bvnVerified) so they keep their level.
-router.post('/reissue-salt', async (req, res) => {
+router.post('/reissue-salt', pinLimiter, async (req, res) => {
   const { email, pin } = req.body;
   if (!email || !pin) return res.status(400).json({ error: 'email and pin are required.' });
   try {
     const user = await prisma.user.findUnique({ where: { email }, include: { attestation: true } });
     if (!user) return res.status(404).json({ error: 'No user for that email.' });
-    if (!user.pinHash || !verifyPin(String(pin), user.pinHash)) return res.status(401).json({ error: 'Incorrect PIN.' });
+
+    const lockedUntil = activePinLock(user);
+    if (lockedUntil) {
+      return res.status(429).json({ error: 'Too many incorrect attempts. Try again later.', retryAfterSeconds: retryAfterSeconds(lockedUntil) });
+    }
+
+    const ok = !!user.pinHash && verifyPin(String(pin), user.pinHash);
+    await prisma.user.update({ where: { id: user.id }, data: ok ? clearPinLock() : recordFailedPinAttempt(user) });
+    if (!ok) return res.status(401).json({ error: 'Incorrect PIN.' });
     if (!user.attestation) return res.status(409).json({ error: 'Link a wallet before logging in.' });
 
     const leaf = await issueLeaf(user.id, user.attestation.hardwareAttested, user.attestation.bvnVerified);
