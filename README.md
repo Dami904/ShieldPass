@@ -16,9 +16,7 @@ Your crypto lives in a **Shielded Pool**, not a standard escrow. You prove owner
   <code>Shielded Pool</code> • <code>On-chain Groth16 (BN254)</code> • <code>Private P2P Transfers</code> • <code>Multi-Asset (XLM + USDC)</code> • <code>Zero-Storage Backend</code> • <code>Passkey Smart Wallets</code> • <code>Gasless</code>
 </p>
 
-<p align="center">
-  🎥 <a href="https://youtu.be/v-W-tMpxT8Y"><strong>Watch the demo</strong></a>
-</p>
+https://github.com/user-attachments/assets/c7becb28-e9a1-4f93-8495-d6640cc946c3
 
 ---
 

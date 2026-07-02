@@ -1,0 +1,55 @@
+# Architecture
+
+The privacy model, old off-ramp design vs. ShieldPass's, and the tech stack underneath it.
+
+## The Old Way vs. The New Way
+
+Traditional off-ramps force you to upload your identity, trust a custodian with your funds, and publicly broadcast your transactions. ShieldPass eliminates all three — and adds **fully private peer-to-peer payments** on top.
+
+### 1. The Shielded Pool (The "Dark Pool")
+<div align="left"><img src="/docs/assets/shielded_pool_concept_1782226827446.png" alt="Shielded Pool Concept" width="384" /></div>
+
+* **Old Way:** When you sent money, everyone could see it sitting in an escrow account.
+* **New Way:** All user funds of a given asset are mixed in one pool. Each balance is a secret **note** (`Poseidon(amount, owner, randomness, …)`) owned by your shielded key. Nobody scanning the chain can tell which note is yours. ShieldPass currently runs **two live pools — XLM and USDC** — each a separate contract instance (same audited wasm/circuits, bound to a different token at `init`).
+
+### 2. On-Chain ZK Verification (No Trusted Verifier)
+* **Old Way:** Proofs were checked off-chain by a backend you had to trust.
+* **New Way:** The Soroban contract verifies every Groth16 proof **itself**, on-chain, via the native `bn254` pairing-check host function (~37.5M instructions — well within budget). The math is the only authority.
+
+### 3. Trustless Append-Only Tree (No Trusted Root)
+* **Old Way:** The pool would have to trust a relayer to publish the correct Merkle root.
+* **New Way:** A dedicated **`merkle_insert`** ZK circuit proves every `old_root → new_root` transition. The contract verifies each append, so the commitment tree advances **trustlessly** — no party can forge a root.
+
+### 4. Private Payments (Hidden Amounts)
+* **Old Way:** Sending money revealed who, to whom, and how much.
+* **New Way:** A **`shielded_transfer`** proof spends your note and mints one note for the recipient + a change note for you — **entirely inside the pool**. The amount, sender, and receiver are all hidden; only the recipient learns the amount (from an encrypted blob).
+
+### 5. Zero-Storage Banking (Hack-Proof Database)
+<div align="left"><img src="/docs/assets/zero_storage_concept_1782226839156.png" alt="Zero Storage Concept" width="384" /></div>
+
+* **Old Way:** We saved your bank account in our database. A breach leaked your banking info.
+* **New Way:** We don't save your bank account *at all*. It lives in your browser; at swap time your phone flashes the details to the backend, we pay the bank, and the details are dropped from memory. The same principle applies to identity: the BVN check's returned legal name is never written to our database either — it's handed back once and cached client-side, exactly like bank details.
+
+### 6. Trustless Refunds (Math-Enforced Escape Hatch)
+<div align="left"><img src="/docs/assets/trustless_payout_concept_1782226850154.png" alt="Trustless Payout Concept" width="384" /></div>
+
+* **Old Way:** If the off-ramp took your crypto but never paid the fiat, your funds were gone.
+* **New Way:** A withdrawal pre-commits a **refund note** on-chain. If the naira never settles, after a 1-hour time-lock you reclaim your value trustlessly — the platform can never simply keep the crypto. *(A future zkTLS `fiat_payout` proof will make the claim itself fully trustless; today the claim is admin-gated and the refund is your guarantee.)*
+
+---
+
+## Tech Stack
+
+| Layer | Tech |
+|---|---|
+| **ZK Circuits** | **Circom** + **snarkjs** Groth16, Poseidon (BN254) |
+| **On-chain verification** | Soroban native `bn254` pairing-check (Rust contract) |
+| **Smart Contract** | Rust / Soroban — Shielded Pool (deposit · insert · confidential_swap · unshield · shielded_transfer · claim · refund), one instance per supported asset |
+| **Note encryption** | x25519 + XChaCha20-Poly1305 (`@noble`) |
+| **Wallets** | OpenZeppelin **Smart Accounts** (WebAuthn passkeys / secp256r1) |
+| **Gasless Relay** | OpenZeppelin Channels |
+| **Backend** | Node, Express, Prisma 7 + Neon Postgres |
+| **Frontend** | React, Vite, Tailwind, Framer Motion |
+| **Fiat Payouts** | Paystack + Lenco (stateless / zero-storage) |
+
+Next: see [How It Works](/how-it-works) for a step-by-step user journey and the cryptographic pipeline, or jump straight to [Contracts, Circuits & SDK](/contracts-and-sdk) for the technical reference.

@@ -65,25 +65,12 @@ Added alongside a security review of the backend surface:
 
 Full detail on the ZK compliance model (Tier 1/2, the nullifier set, why the proof is load-bearing) is on the [Security](/security) page.
 
-## 5. Deployment
-
-- **Backend** → Render, native auto-deploy from `main`. Build must compile the SDK first (`SDK/dist` is gitignored) then run `prisma generate` + `prisma db push` before `npm run build`. See `render.yaml`.
-- **Frontend** → Vercel, same SDK-prebuild requirement, encoded in `vercel.json`.
-- **Database** → Neon Postgres (serverless), direct (non-pooled) connection string — the pooled `-pooler` host can hang during `prisma db push`.
-- Both platforms install once at the **monorepo root** (`npm install --include=dev`) because this is an npm-workspaces repo — a per-package install against the committed lockfile fails on a fresh clone.
-
-## 6. Local development
-
-```bash
-# Backend — prisma generate is required (the v7 client is gitignored)
-cd backend && npm install && npx prisma generate && npm run dev   # http://localhost:3001
-
-# Frontend
-cd frontend && npm install && npm run dev                          # http://localhost:5173
-```
+## Running the tests
 
 ```bash
 cd SDK/contracts/shielded_pool && cargo test    # contract tests (real proofs)
 cd backend && npm test                          # 29 tests: KYC, PIN lockout, BVN, compliance
 cd SDK && npm run test:unit                     # SDK unit tests
 ```
+
+See [Getting Started](/getting-started) for full local setup, and [Deployment](/deployment) for how this actually ships to Render/Vercel.

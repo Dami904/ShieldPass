@@ -1,0 +1,52 @@
+# Getting Started
+
+Prerequisites, local dev commands, and the environment variables you'll need.
+
+## Prerequisites
+
+Node 20+ (Prisma 7 requires ≥ 20.19), Rust + `stellar` CLI (for the contract), `circom` (only if you need to regenerate circuits), a backend `.env`, and a frontend `.env`.
+
+## Run it locally
+
+```bash
+# Backend — prisma generate is required (the v7 client is gitignored)
+cd backend && npm install && npx prisma generate && npm run dev   # http://localhost:3001
+
+# Frontend
+cd frontend && npm install && npm run dev                          # http://localhost:5173
+```
+
+Build & test the Soroban Shielded Pool:
+
+```bash
+cd SDK/contracts/shielded_pool && cargo test           # contract tests (real proofs)
+stellar contract build                                  # wasm for deploy
+```
+
+Regenerate circuits + proving keys (only if you change a circuit):
+
+```bash
+cd SDK/circom && npm install
+bash scripts/build.sh confidential_swap
+bash scripts/build.sh merkle_insert
+bash scripts/build.sh shielded_transfer
+```
+
+## Environment variables
+
+| File | Var | Purpose |
+|---|---|---|
+| `backend/.env` | `NEON_CONNECTION_STRING` | Neon Postgres direct URL (`?sslmode=require`, no `channel_binding`) |
+| `backend/.env` | `STELLAR_CONTRACT_ID` / `USDC_POOL_CONTRACT_ID` | XLM / USDC Shielded Pool contract ids |
+| `backend/.env` | `XLM_SAC_ADDRESS` / `USDC_SAC_ADDRESS` | Stellar Asset Contract addresses backing each pool |
+| `backend/.env` | `STELLAR_RELAYER_SECRET` | Admin/relayer keypair (pool init, faucet seeding) |
+| `backend/.env` | `CHANNELS_URL` / `CHANNELS_API_KEY` | OpenZeppelin Channels — required for gasless smart-account submission |
+| `backend/.env` | `CORS_ORIGIN` | Comma-separated allowed frontend origin(s); unset = allow all (dev only) |
+| `backend/.env` | `PAYSTACK_SECRET_KEY` / `LENCO_*` | Naira payout providers |
+| `backend/.env` | `FAUCET_NOTE_AMOUNT` / `FAUCET_NOTE_ASSET` | Onboarding seed note (defaults `500` / `XLM`) |
+| `frontend/.env` | `VITE_API_URL` | Backend URL (powers swaps, transfers, scanning, notifications) |
+| `frontend/.env` | `VITE_ACCOUNT_WASM_HASH` / `VITE_WEBAUTHN_VERIFIER_ADDRESS` | smart-account-kit account wasm + WebAuthn verifier contract |
+| `frontend/.env` | `VITE_XLM_POOL_CONTRACT_ID` / `VITE_USDC_POOL_CONTRACT_ID` | Per-asset Shielded Pool contract ids |
+| `frontend/.env` | `VITE_XLM_SAC` / `VITE_USDC_SAC` | Per-asset SAC addresses (drives which assets show up in the UI) |
+
+See [Security](/security) for the PIN-lockout, rate-limiting, and CORS details behind `CORS_ORIGIN`, and [Deployment](/deployment) for the live contract IDs these variables point at today.

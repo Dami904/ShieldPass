@@ -1,6 +1,7 @@
 import { Footer, Layout, Navbar } from 'nextra-theme-docs'
-import { Banner, Head } from 'nextra/components'
+import { Head } from 'nextra/components'
 import { getPageMap } from 'nextra/page-map'
+import Image from 'next/image'
 import 'nextra-theme-docs/style.css'
 import './globals.css'
 
@@ -9,14 +10,27 @@ export const metadata = {
     default: 'ShieldPass Docs',
     template: '%s – ShieldPass Docs'
   },
-  description: 'Documentation for ShieldPass V2'
+  description: 'Documentation for ShieldPass — private crypto-to-fiat off-ramp and payments on Stellar.',
+  icons: { icon: '/logo.jpeg' }
 }
 
-const banner = (
-  <Banner storageKey="shieldpass-banner"><span className="banner-typing">ShieldPass V2 is here!</span></Banner>
+const logo = (
+  <Image
+    src="/logo.jpeg"
+    alt="ShieldPass"
+    width={120}
+    height={28}
+    className="brand-logo"
+    style={{ objectFit: 'contain', borderRadius: 4 }}
+  />
 )
 
-const navbar = <Navbar logo={<span className="nav-logo">ShieldPass</span>} />
+const navbar = (
+  <Navbar
+    logo={logo}
+    projectLink="https://github.com/Xyrelix/ShieldPass"
+  />
+)
 
 const footer = <Footer>MIT {new Date().getFullYear()} © ShieldPass.</Footer>
 
@@ -29,7 +43,6 @@ export default async function RootLayout({ children }: { children: React.ReactNo
       </Head>
       <body>
         <Layout
-          banner={banner}
           navbar={navbar}
           pageMap={await getPageMap()}
           docsRepositoryBase="https://github.com/Xyrelix/ShieldPass/tree/main/docs-site/content"

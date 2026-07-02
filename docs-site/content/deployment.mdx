@@ -1,0 +1,19 @@
+# Deployment
+
+Live network and contract info, plus how the two services deploy.
+
+## Testnet contracts
+
+* **Network:** Stellar / Soroban **testnet**
+* **XLM Shielded Pool:** [`CBHGVQ7UH4C47LFUYFFKZMRI7AYUQ4TGYNIKX37KFKGBFGECKQM7BEG5`](https://stellar.expert/explorer/testnet/contract/CBHGVQ7UH4C47LFUYFFKZMRI7AYUQ4TGYNIKX37KFKGBFGECKQM7BEG5) — token: native XLM SAC
+* **USDC Shielded Pool:** [`CCRQD3ALTYX5GMSQA5GDN65CF3DPLLHPWOOKHQOKRDO3JNK3FVYDM7ZP`](https://stellar.expert/explorer/testnet/contract/CCRQD3ALTYX5GMSQA5GDN65CF3DPLLHPWOOKHQOKRDO3JNK3FVYDM7ZP) — token: testnet USDC SAC
+* **Wallets:** OpenZeppelin smart-account-kit, shared pre-deployed account wasm + WebAuthn verifier on testnet (gasless submission via OpenZeppelin Channels)
+
+## Where each piece runs
+
+- **Backend** → Render, native auto-deploy from `main`. Build compiles the SDK first (`SDK/dist` is gitignored) then runs `prisma generate` + `prisma db push` before `npm run build`. See `render.yaml`.
+- **Frontend** → Vercel, same SDK-prebuild requirement, encoded in `vercel.json`.
+- **Database** → Neon Postgres (serverless), direct (non-pooled) connection string — the pooled `-pooler` host can hang during `prisma db push`.
+- Both platforms install once at the **monorepo root** (`npm install --include=dev`) because this is an npm-workspaces repo — a per-package install against the committed lockfile fails on a fresh clone.
+
+See [Getting Started](/getting-started) for the full environment variable list these deployments need.
