@@ -81,7 +81,7 @@ model Swap {
   quoteSource       String    @default("fallback")
   quotedAt          DateTime?
   status          String      @default("LOCKED_ON_CHAIN")
-  swapId          String?     // on-chain swap id returned by lock_swap
+  swapId          String?     @unique // on-chain swap id returned by lock_swap — one payout per id, ever
   txHash          String?
   lencoTransferId String?
   createdAt       DateTime    @default(now())

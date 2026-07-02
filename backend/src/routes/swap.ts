@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { Networks, Keypair } from '@stellar/stellar-sdk';
 import { ShieldedPoolClient } from '@shieldpass/sdk';
+import { Prisma } from '../generated/prisma/client';
 import { prisma } from '../db';
 import { burnNullifier } from '../services/compliance';
 import { treeServiceFor } from '../services/tree';
@@ -110,6 +111,13 @@ router.post('/execute', async (req, res) => {
   const user = await prisma.user.findUnique({ where: { email } });
   if (!user) return res.status(404).json({ error: 'No account for that email.' });
 
+  // Replay guard: an on-chain swap id may only ever be paid out once. This is a fast-path
+  // check; the DB's unique constraint on swapId is what actually closes the race if two
+  // requests for the same id land concurrently (caught below on create).
+  if (await prisma.swap.findUnique({ where: { swapId: String(onChainSwapId) } })) {
+    return res.status(409).json({ error: 'This swap has already been processed.' });
+  }
+
   // ZERO-STORAGE ARCHITECTURE:
   // We do not save or look up the bank account in the DB.
   // We use the ephemeral details passed directly from the client's local storage.
@@ -118,26 +126,62 @@ router.post('/execute', async (req, res) => {
   // falling back to a name lookup for legacy saved banks.
   const bankCode: string | undefined = ephemeralBankDetails.bankCode || NIGERIAN_BANKS.find(b => b.name === bankName)?.code;
 
-  // 1. Price the swap (the contract already enforced the tier gate on-chain).
+  // 1. Verify against on-chain truth: `cryptoAmount`/`cryptoAmountUnits` above are still just
+  // what the CLIENT claims. The contract's `confidential_swap` call already recorded the real,
+  // proof-verified amount under `onChainSwapId` (PayoutDetails.amount) — so when a pool is
+  // configured we price and pay off THAT, never off client input. A tampered/replayed request
+  // can at most match the on-chain amount, never inflate it.
+  let verifiedCryptoAmount = Number(cryptoAmount);
+  let verifiedCryptoUnits = exactCryptoUnits;
+  const cfgForVerify = chainConfig();
+  const poolIdForVerify = poolIdForAsset(String(assetCode)) || cfgForVerify.contractId;
+  // Same "is chain actually configured" gate used below for claim_swap: relayerSecret is
+  // read live from env on every call, whereas poolIdForVerify comes from a registry built
+  // once at process start, so relayerSecret is the reliable signal in dev/test.
+  if (poolIdForVerify && cfgForVerify.relayerSecret) {
+    let payout;
+    try {
+      const pool = new ShieldedPoolClient(cfgForVerify.rpcUrl, cfgForVerify.network, poolIdForVerify);
+      payout = await pool.getPayout(BigInt(onChainSwapId));
+    } catch (err) {
+      console.error('[swap/execute] get_payout lookup failed:', err);
+      return res.status(404).json({ error: 'No matching on-chain swap found for that id.' });
+    }
+    if (payout.status !== 'Pending') {
+      return res.status(409).json({ error: `This swap is already ${payout.status.toLowerCase()} on-chain.` });
+    }
+    verifiedCryptoUnits = payout.amount.toString();
+    verifiedCryptoAmount = Number(payout.amount) / 1e7; // Stellar assets use 7 decimals (stroops)
+  }
+
+  // 2. Price the swap (the contract already enforced the tier gate on-chain).
   let quote: Quote;
   try {
-    quote = await getQuote(String(tokenAddress), Number(cryptoAmount), assetCode);
+    quote = await getQuote(String(tokenAddress), verifiedCryptoAmount, assetCode);
   } catch (err) {
     return res.status(400).json({ error: err instanceof Error ? err.message : 'Could not quote swap.' });
   }
 
   // Record the swap as fiat-processing before moving fiat.
   // Note: bankAccountId is nullified in DB structure per Zero-Storage architecture.
-  const swap = await prisma.swap.create({
-    data: {
-      userId: user.id, tokenAddress: String(tokenAddress),
-      assetCode: quote.assetCode, tokenLabel: quote.tokenLabel,
-      cryptoAmount: Number(cryptoAmount), nairaAmount: quote.nairaAmount,
-      cryptoAmountUnits: exactCryptoUnits, nairaAmountKobo: nairaToKobo(quote.nairaAmount),
-      quoteRateNaira: quote.rate, quoteSource: quote.source, quotedAt: new Date(quote.updatedAt),
-      status: SwapStatus.FIAT_PROCESSING, swapId: String(onChainSwapId),
-    },
-  });
+  let swap;
+  try {
+    swap = await prisma.swap.create({
+      data: {
+        userId: user.id, tokenAddress: String(tokenAddress),
+        assetCode: quote.assetCode, tokenLabel: quote.tokenLabel,
+        cryptoAmount: verifiedCryptoAmount, nairaAmount: quote.nairaAmount,
+        cryptoAmountUnits: verifiedCryptoUnits, nairaAmountKobo: nairaToKobo(quote.nairaAmount),
+        quoteRateNaira: quote.rate, quoteSource: quote.source, quotedAt: new Date(quote.updatedAt),
+        status: SwapStatus.FIAT_PROCESSING, swapId: String(onChainSwapId),
+      },
+    });
+  } catch (err) {
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+      return res.status(409).json({ error: 'This swap has already been processed.' });
+    }
+    throw err;
+  }
 
   // 3. Pay the Naira out to the user's bank account ephemerally.
   // Lenco is the primary payout provider; Paystack is the fallback if Lenco fails.

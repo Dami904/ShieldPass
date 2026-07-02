@@ -9,6 +9,18 @@ import { withAccountLock, waitForLanding } from './accountLock';
 const bytesScVal = (u8: Uint8Array) => xdr.ScVal.scvBytes(Buffer.from(u8));
 const signalsScVal = (sigs: Uint8Array[]) => xdr.ScVal.scvVec(sigs.map(bytesScVal));
 
+/** Mirrors the contract's `PayoutDetails` (see shielded_pool/src/lib.rs). `amount` is the
+ *  exact on-chain-proven crypto amount for this swap — the only trustworthy source for
+ *  what a caller may be paid out against, since it comes from the verified ZK proof, not
+ *  from anything a client can supply in a request body. */
+export interface PayoutDetails {
+    blindedBankHash: Uint8Array;
+    amount: bigint;
+    refundCommitment: Uint8Array;
+    created: bigint;
+    status: 'Pending' | 'Completed' | 'Refunded';
+}
+
 /**
  * Client for the trustless ShieldedPool Soroban contract (Groth16-verified).
  * ABI: init, deposit, faucet_seed, insert, confidential_swap, claim_swap,
@@ -114,12 +126,30 @@ export class ShieldedPoolClient {
         return Number(await this.simRead('next_index'));
     }
 
+    /**
+     * The on-chain-authoritative record of a swap, set atomically inside `confidential_swap`
+     * from the *proven* `swap_amount` public signal. Callers that pay out fiat against a swap
+     * id MUST price off `amount` here, never off a client-supplied figure — this is the only
+     * value a malicious client cannot inflate, since it comes from a verified Groth16 proof.
+     */
+    async getPayout(swapId: bigint): Promise<PayoutDetails> {
+        const raw = await this.simRead('get_payout', nativeToScVal(swapId, { type: 'u64' }));
+        const statusRaw = Array.isArray(raw.status) ? raw.status[0] : (raw.status?.tag ?? raw.status);
+        return {
+            blindedBankHash: new Uint8Array(raw.blinded_bank_hash),
+            amount: BigInt(raw.amount),
+            refundCommitment: new Uint8Array(raw.refund_commitment),
+            created: BigInt(raw.created),
+            status: String(statusRaw) as PayoutDetails['status'],
+        };
+    }
+
     // ---- internals ----
 
-    private async simRead(method: string): Promise<any> {
+    private async simRead(method: string, ...args: xdr.ScVal[]): Promise<any> {
         const account = new Account(Keypair.random().publicKey(), '0');
         const tx = new TransactionBuilder(account, { fee: BASE_FEE, networkPassphrase: this.networkPassphrase })
-            .addOperation(new Contract(this.contractId).call(method)).setTimeout(30).build();
+            .addOperation(new Contract(this.contractId).call(method, ...args)).setTimeout(30).build();
         const sim = await this.server.simulateTransaction(tx);
         if (!rpc.Api.isSimulationSuccess(sim) || !sim.result) throw new Error(`[ShieldedPoolClient] ${method} sim failed`);
         return scValToNative(sim.result.retval);
