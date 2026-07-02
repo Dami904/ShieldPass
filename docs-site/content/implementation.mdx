@@ -1,0 +1,89 @@
+# Implementation
+
+The real, current backend architecture — what actually runs today, not the original 12-day hackathon plan. (That plan assumed Noir circuits, Freighter wallets, SQLite, and an off-chain relayer-attested compliance registry; none of that shipped. The project pivoted to Circom/Groth16 verified **on-chain**, passkey smart wallets, and Postgres. See [Contracts, Circuits & SDK](/contracts-and-sdk) for the ZK/contract layer this section builds on.)
+
+<div align="left"><img src="/docs/assets/media__1782222974155.png" alt="A real Soroban transaction: an SDK-invoked contract call funding a smart wallet with 500 XLM" width="600" /></div>
+
+*A real testnet transaction — the backend's relayer funding a newly-created smart wallet's onboarding note.*
+
+## 1. Backend layout
+
+`backend/` is a Node + Express + TypeScript service backed by **Prisma 7 + Neon Postgres**.
+
+```
+backend/src/
+  app.ts            # Express app: helmet, rate limiting, CORS, route mounting
+  routes/            # HTTP endpoints (below)
+  services/          # business logic, most routes are thin wrappers over these
+  db.ts              # Prisma client
+```
+
+### Routes
+
+| Mount | Endpoints | Purpose |
+|---|---|---|
+| `/kyc` | `link-wallet`, `submit-bvn`, `verify-pin`, `reissue-salt`, `faucet-status`, `account` | Onboarding, Tier 1/2 compliance, PIN auth, login-on-new-device. |
+| `/swap` | `banks`, `resolve-account`, `quote`, `execute`, `history` | The crypto→Naira off-ramp: bank lookup, name-enquiry, live quote, and the on-chain `confidential_swap` + fiat payout orchestration. |
+| `/tree` | `state`, `path/:index`, `assign`, `confirm`, `index/:commitment`, `retry/:index`, `pending-count` | Serves Merkle membership paths and drives the `merkle_insert` proof lifecycle that advances each pool's on-chain root. |
+| `/notes` | `blob`, `since/:cursor`, `identity/:email` | Encrypted note-blob relay for private (`shielded_transfer`) payments — the backend stores ciphertext only. |
+| `/notifications` | `/` (post/get), `read` | In-app activity feed. |
+| `/wallet` | `relay`, `submit` | Gasless transaction relay: proxies smart-account-kit's `{func, auth}` / `{xdr}` payloads to OpenZeppelin Channels. |
+| `/verify` | `submit-proof` | Relayer endpoint for the (legacy) off-chain proof-verification path. |
+
+### Services
+
+`bvn.ts` (mock BVN lookup), `compliance.ts`, `fiatMode.ts` (mock vs. live payouts), `lenco.ts` / `paystack.ts` (naira payout providers), `passkey.ts` (Channels relay), `pin.ts` (scrypt hashing + lockout state machine), `pools.ts` (per-asset pool registry), `quote.ts` (crypto→naira rate), `tree.ts` (per-pool Merkle tree service), `seed.ts` (public fallback funding).
+
+## 2. Data model (Prisma)
+
+Real production models — see `backend/prisma/schema.prisma` for the full source of truth:
+
+| Model | Role |
+|---|---|
+| `User` | Email-keyed account: wallet addresses, PIN hash, PIN-lockout state (`failedPinAttempts`/`pinLockedUntil`), shielded identity (`shieldedOwner`/`shieldedEncPub`/`shieldedAddress`). |
+| `ComplianceAttestation` | Tier 1 (`hardwareAttested`) / Tier 2 (`bvnVerified`) flags + the Merkle leaf that binds them into the compliance proof. |
+| `BankAccount` | Saved Naira payout destinations. |
+| `Swap` | The crypto→Naira off-ramp lifecycle (`LOCKED_ON_CHAIN` → `FIAT_PROCESSING` → `COMPLETED`/`REFUNDED`), exact on-chain units + kobo amounts. |
+| `Nullifier` | Spent ZK nullifiers — replay protection independent of the on-chain nullifier set. |
+| `TreeLeaf` | Every appended commitment, keyed `(poolId, index)` — **one tree per asset pool** (XLM and USDC each get their own). This is how the backend rebuilds each pool's `IncrementalMerkleTree` to serve proving inputs. |
+| `NoteBlob` | Encrypted `shielded_transfer` payloads, scanned by recipients via a monotonic cursor. |
+| `Notification` | The in-app activity feed. |
+| `WebhookEvent` | Idempotency ledger for payout-provider webhooks. |
+
+## 3. Multi-asset pools
+
+The `shielded_pool` contract binds to exactly one token at `init`, so XLM and USDC are **two separate contract instances** built from the same wasm/circuits. `services/pools.ts` is the registry that maps an asset code to its pool contract id, SAC address, and faucet config; `services/tree.ts` is per-pool (`treeServiceFor(poolId)`), and every tree/swap route takes a `pool` parameter (defaulting to XLM for backward compatibility).
+
+## 4. Security hardening
+
+Added alongside a security review of the backend surface:
+
+- **PIN brute-force**: `verify-pin` and `reissue-salt` are rate-limited per-IP (`express-rate-limit`) *and* enforce a persistent per-account lockout — 5 failed attempts locks the account for 15 minutes (`User.failedPinAttempts`/`pinLockedUntil`), so rotating IPs doesn't bypass it.
+- **Open bank-name oracle**: `resolve-account` (Lenco name-enquiry) was unauthenticated and could resolve any account number to its owner's real name — now rate-limited.
+- **CORS**: driven by a `CORS_ORIGIN` allowlist env var instead of a wildcard; falls back to allow-all only when unset (dev convenience), with a startup warning.
+- **`helmet()`** + a baseline global rate limit, as defense in depth.
+
+Full detail on the ZK compliance model (Tier 1/2, the nullifier set, why the proof is load-bearing) is on the [Security](/security) page.
+
+## 5. Deployment
+
+- **Backend** → Render, native auto-deploy from `main`. Build must compile the SDK first (`SDK/dist` is gitignored) then run `prisma generate` + `prisma db push` before `npm run build`. See `render.yaml`.
+- **Frontend** → Vercel, same SDK-prebuild requirement, encoded in `vercel.json`.
+- **Database** → Neon Postgres (serverless), direct (non-pooled) connection string — the pooled `-pooler` host can hang during `prisma db push`.
+- Both platforms install once at the **monorepo root** (`npm install --include=dev`) because this is an npm-workspaces repo — a per-package install against the committed lockfile fails on a fresh clone.
+
+## 6. Local development
+
+```bash
+# Backend — prisma generate is required (the v7 client is gitignored)
+cd backend && npm install && npx prisma generate && npm run dev   # http://localhost:3001
+
+# Frontend
+cd frontend && npm install && npm run dev                          # http://localhost:5173
+```
+
+```bash
+cd SDK/contracts/shielded_pool && cargo test    # contract tests (real proofs)
+cd backend && npm test                          # 29 tests: KYC, PIN lockout, BVN, compliance
+cd SDK && npm run test:unit                     # SDK unit tests
+```

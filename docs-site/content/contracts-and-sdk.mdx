@@ -1,0 +1,81 @@
+# Contracts, Circuits & SDK
+
+How the Soroban smart contract, the Circom/Groth16 circuits, and the `@shieldpass/sdk` TypeScript SDK fit together. If you're integrating a third-party app against ShieldPass, start with the [Integration](/integration) page instead — this page is the reference for how it works internally.
+
+<div align="left"><img src="/docs/assets/media__1782223016879.png" alt="A ShieldedPool contract instance on Stellar Expert, showing its native XLM balance and instance data" width="600" /></div>
+
+*A real `ShieldedPool` contract instance on [Stellar Expert](https://stellar.expert), holding the pool's native balance and instance storage.*
+
+## 1. The Shielded Pool contract
+
+`SDK/contracts/shielded_pool` is a `#![no_std]` Soroban contract. Each deployed instance is bound to exactly **one** token at `init` — there is no on-chain asset label — so multi-asset support (XLM + USDC today) means one contract instance per asset, all built from the same wasm.
+
+```rust
+pub fn init(env: Env, admin: Address, token_address: Address, tier2_threshold: i128)
+```
+
+### Public entry points
+
+| Function | Purpose |
+|---|---|
+| `deposit(user, amount, note_commitment)` | Public shield: pulls `amount` of the pool's token from `user` and queues `note_commitment` for insertion. |
+| `faucet_seed(note_commitment)` | Admin-only: queues a commitment with no public transfer (used to seed a new user's onboarding note from the pool's own balance). |
+| `insert(proof_a, proof_b, proof_c, public_signals)` | Verifies a `merkle_insert` proof (`[old_root, new_root, leaf, index]`) and advances the on-chain commitment tree by one leaf. Anyone can call it — the proof is the only authority. |
+| `confidential_swap(proof_a, proof_b, proof_c, public_signals, refund_commitment)` | Burns a note, mints a change note, and queues a fiat payout. Returns a `swap_id`. Public signals: `[nullifier, change_commitment, blinded_bank_hash, merkle_root, require_bvn, swap_amount, recipient]` (`recipient` is unused here — off-ramp payouts are bound to a bank hash, not an address). |
+| `unshield(proof_a, proof_b, proof_c, public_signals, recipient)` | Same proof shape as `confidential_swap`, but transfers `swap_amount` of the pool token directly to `recipient` instead of paying out fiat. `public_signals[6]` is `int_be(sha256(xdr(recipient))) mod r` — the contract recomputes it from the passed `Address` and rejects a mismatch, so a compromised relayer can't redirect the payout. |
+| `shielded_transfer(proof_a, proof_b, proof_c, public_signals)` | V2 private transfer: spends one note, mints **two** output notes (recipient + change) entirely inside the pool. No token movement — value just changes owner. Amounts stay hidden; only `recipient_owner` is a public signal. |
+| `claim_swap(swap_id)` | Admin-only: after paying the naira off-chain, sweeps the swapped crypto to the treasury. |
+| `refund_swap(swap_id)` | Permissionless: if `claim_swap` never happens, after a 1-hour time-lock anyone can trigger the pre-committed refund note — the trustless escape hatch if the off-ramp fails to pay. |
+| `current_root()` / `next_index()` / `get_payout(swap_id)` | Read-only views. |
+
+Every state-changing call **verifies a Groth16 proof on-chain** via Soroban's native `bn254` pairing-check host functions (`groth16::verify`, in `SDK/contracts/shielded_pool/src/groth16.rs`) — there is no off-chain trusted verifier anywhere in the flow.
+
+## 2. The circuits (Circom, not Noir)
+
+Three Circom circuits, all Groth16/Poseidon over BN254, built via `SDK/circom` (`snarkjs`):
+
+| Circuit | Where it runs | Role |
+|---|---|---|
+| `confidential_swap` | Browser | Proves ownership of a note, derives the spend nullifier, computes the change note. Powers **Withdraw** and **Unshield**. |
+| `shielded_transfer` | Browser | Spends one note → two output notes (recipient + change). Powers **private P2P sends**. |
+| `merkle_insert` | Backend | Proves each `old_root → new_root` tree append, so the commitment tree advances trustlessly with no on-chain hashing. |
+
+Regenerate a circuit's proving/verifying keys with:
+
+```bash
+cd SDK/circom && npm install
+bash scripts/build.sh confidential_swap
+bash scripts/build.sh shielded_transfer
+bash scripts/build.sh merkle_insert
+```
+
+A fourth circuit, `fiat_payout`, exists as a future-work stub (`SDK/circuits/fiat_payout`) for a zkTLS proof that would make the fiat-settlement claim itself trustless instead of admin-gated — not wired into the contract yet.
+
+## 3. The `@shieldpass/sdk` TypeScript SDK
+
+Everything under `SDK/src/`, published as `@shieldpass/sdk` and consumed by `backend`/`frontend` via `file:../SDK`.
+
+| Module | Exports | Responsibility |
+|---|---|---|
+| `ShieldPassClient.ts` | `ShieldPassClient` | High-level facade tying proving + Stellar together. |
+| `shieldedPool.ts` | `ShieldedPoolClient` | Typed wrapper over every `ShieldedPool` contract call (`deposit`, `insert`, `confidentialSwap`, `unshield`, `shieldedTransfer`, `claimSwap`, `refundSwap`, `currentRoot`, `nextIndex`). |
+| `stellar.ts` | `StellarContractClient`, `addressToField` | Soroban transaction building/submission; `addressToField` encodes a Stellar address into the same BN254 field element the contract's `recipient_field()` computes on-chain (used for unshield recipient-binding). |
+| `groth16Prover.ts` | `prove`, `serializeProof`, `fieldToBytes32` | Runs a circuit's witness + Groth16 proof (via `snarkjs`) and serializes it into the `{a, b, c}` byte layout the contract expects. |
+| `tree.ts` | `IncrementalMerkleTree` | Client-side mirror of the on-chain Poseidon commitment tree, used to compute membership paths for proving. |
+| `identity.ts` | `deriveShieldedIdentity`, `encodeAddress`/`decodeAddress`, `encryptNote`/`decryptNote` | Shielded key derivation (from the passkey's PRF output), `shp_…` address encoding, and x25519 + XChaCha20-Poly1305 note encryption for private transfers. |
+| `smartAccount.ts` | `SmartAccountWalletClient` | OpenZeppelin smart-account-kit wallet client — passkey signing + gasless relay via `/wallet/relay`. |
+| `circuitInputs.ts`, `notes.ts`, `poseidon.ts`, `issuer.ts`, `prover.ts`, `accountLock.ts`, `types.ts`, `errors.ts`, `utils.ts` | — | Circuit input assembly, note structs, Poseidon hashing, compliance issuance, and shared types/errors. |
+
+## 4. Deployed contracts (testnet)
+
+| Pool | Contract ID |
+|---|---|
+| XLM | [`CBHGVQ7UH4C47LFUYFFKZMRI7AYUQ4TGYNIKX37KFKGBFGECKQM7BEG5`](https://stellar.expert/explorer/testnet/contract/CBHGVQ7UH4C47LFUYFFKZMRI7AYUQ4TGYNIKX37KFKGBFGECKQM7BEG5) |
+| USDC | [`CCRQD3ALTYX5GMSQA5GDN65CF3DPLLHPWOOKHQOKRDO3JNK3FVYDM7ZP`](https://stellar.expert/explorer/testnet/contract/CCRQD3ALTYX5GMSQA5GDN65CF3DPLLHPWOOKHQOKRDO3JNK3FVYDM7ZP) |
+
+Build and test the contract locally:
+
+```bash
+cd SDK/contracts/shielded_pool && cargo test   # 14 tests: real proofs, double-spend, wrong-recipient, refund timeout, ...
+stellar contract build                          # wasm for deploy
+```

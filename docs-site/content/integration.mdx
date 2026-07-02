@@ -1,0 +1,83 @@
+# Integration Guide
+
+How to connect a third-party app to ShieldPass's `ShieldedPool` contract directly on Stellar. For the full function/module reference this page builds on, see [Contracts, Circuits & SDK](/contracts-and-sdk).
+
+Because the core logic lives in a standalone Soroban contract, any app can call it — you don't have to route traffic through the ShieldPass backend. The one thing you *can't* skip is proof generation: every state-changing call requires a Groth16 proof, verified on-chain, so integrating means running (or embedding) the same circuits ShieldPass's own frontend uses.
+
+## Prerequisites
+
+- **Network:** Stellar Testnet (`https://soroban-testnet.stellar.org`)
+- **Contract IDs** (one pool per asset — a pool is bound to a single token at `init`):
+  - XLM: [`CBHGVQ7UH4C47LFUYFFKZMRI7AYUQ4TGYNIKX37KFKGBFGECKQM7BEG5`](https://stellar.expert/explorer/testnet/contract/CBHGVQ7UH4C47LFUYFFKZMRI7AYUQ4TGYNIKX37KFKGBFGECKQM7BEG5)
+  - USDC: [`CCRQD3ALTYX5GMSQA5GDN65CF3DPLLHPWOOKHQOKRDO3JNK3FVYDM7ZP`](https://stellar.expert/explorer/testnet/contract/CCRQD3ALTYX5GMSQA5GDN65CF3DPLLHPWOOKHQOKRDO3JNK3FVYDM7ZP)
+
+## The easy path: use `@shieldpass/sdk`
+
+The SDK wraps proof generation and the contract calls into one client:
+
+```typescript
+import { ShieldedPoolClient, prove, deriveShieldedIdentity } from '@shieldpass/sdk';
+
+const pool = new ShieldedPoolClient({
+  rpcUrl: 'https://soroban-testnet.stellar.org',
+  networkPassphrase: 'Test SDF Network ; September 2015',
+  contractId: 'CBHGVQ7UH4C47LFUYFFKZMRI7AYUQ4TGYNIKX37KFKGBFGECKQM7BEG5', // XLM pool
+});
+
+// A public shield: pull `amount` from `user`, queue the note commitment for insertion.
+const hash = await pool.deposit(userAddress, amountStroops, noteCommitment, signer);
+```
+
+`ShieldedPoolClient` exposes one typed method per contract entry point — `deposit`, `insert`, `confidentialSwap`, `unshield`, `shieldedTransfer`, `claimSwap`, `refundSwap`, `currentRoot`, `nextIndex` — matching the on-chain function signatures documented on the [Contracts](/contracts-and-sdk) page.
+
+## Calling the contract directly
+
+If you're not using the SDK — a server-side integration, a different language — you still need a valid Groth16 proof for anything beyond read-only views. This example shows the shape of a raw invocation (proof generation itself has to happen via the `confidential_swap`/`shielded_transfer`/`merkle_insert` circuits — there's no way around running them, since that's what makes the privacy guarantee real):
+
+```typescript
+import { rpc, Contract, Keypair, Networks, TransactionBuilder, BASE_FEE, nativeToScVal } from '@stellar/stellar-sdk';
+
+const server = new rpc.Server('https://soroban-testnet.stellar.org');
+const contract = new Contract('CBHGVQ7UH4C47LFUYFFKZMRI7AYUQ4TGYNIKX37KFKGBFGECKQM7BEG5');
+
+async function unshield(signerSecret: string, proof: { a: Buffer; b: Buffer; c: Buffer }, publicSignals: Buffer[], recipient: string) {
+  const signer = Keypair.fromSecret(signerSecret);
+  const account = await server.getAccount(signer.publicKey());
+
+  let tx = new TransactionBuilder(account, { fee: BASE_FEE, networkPassphrase: Networks.TESTNET })
+    .addOperation(contract.call(
+      'unshield',
+      nativeToScVal(proof.a, { type: 'bytes' }),
+      nativeToScVal(proof.b, { type: 'bytes' }),
+      nativeToScVal(proof.c, { type: 'bytes' }),
+      nativeToScVal(publicSignals, { type: 'bytes[]' }),
+      nativeToScVal(recipient, { type: 'address' }),
+    ))
+    .setTimeout(30)
+    .build();
+
+  const sim = await server.simulateTransaction(tx);
+  tx = rpc.assembleTransaction(tx, sim).build();
+  tx.sign(signer);
+  return server.sendTransaction(tx);
+}
+```
+
+<div align="left"><img src="/docs/assets/trustless_payout_concept_1782226850154.png" alt="Trustless Payout Concept" width="384" /></div>
+
+If you integrate the fiat leg, build the trustless refund path in too: `confidential_swap` pre-commits a refund note on-chain, reclaimable via `refund_swap` after a 1-hour time-lock if your payout processor never calls `claim_swap`. Don't skip this — it's what keeps a failed off-ramp from being able to simply keep the user's crypto.
+
+## What you get by integrating directly vs. through ShieldPass
+
+| | Direct contract integration | ShieldPass frontend/backend |
+|---|---|---|
+| Proof generation | You run the circuits yourself (client-side, to preserve the privacy guarantee) | Handled in-browser via the SDK's `groth16Prover` |
+| Gas | You pay normal Soroban fees | Gasless — submitted via OpenZeppelin Channels |
+| Wallet | Any Stellar keypair/signer | Passkey smart wallets (smart-account-kit), no seed phrase |
+| Fiat off-ramp | Not available — `confidential_swap` just queues a payout record on-chain | ShieldPass's backend watches `Payout` records and pays out via Paystack/Lenco |
+
+If you only need the on-chain privacy primitive (shielded balances, private transfers) and not the Naira off-ramp, direct contract integration is the right layer. If you want the fiat leg too, you need a payout-processing backend watching `get_payout(swap_id)` after `confidential_swap` — ShieldPass's own `backend/src/routes/swap.ts` is the reference implementation.
+
+## Compliance note
+
+Tier-2 (high-value, BVN-gated) swaps are enforced **inside the same `confidential_swap` proof** via the public `require_bvn` signal — there's no separate on-chain compliance contract to call. See [Security](/security) for how the tiering works.

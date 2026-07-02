@@ -1,0 +1,46 @@
+# Security
+
+Two layers: the **ZK compliance model** (why the proof is load-bearing, not decorative) and the **backend hardening** protecting the plain HTTP surface in front of it.
+
+<div align="left"><img src="/docs/assets/zero_storage_concept_1782226839156.png" alt="Zero Storage Concept" width="384" /></div>
+
+## 1. The ZK compliance gate
+
+ShieldPass was built for the *Stellar Hacks: ZK* hackathon, whose binding rule is that the ZK proof must be **load-bearing** — essential to the flow, not bolted on for show. Concretely:
+
+- Every `confidential_swap`, `unshield`, and `shielded_transfer` call **requires** a valid Groth16 proof, verified on-chain via Soroban's native `bn254` pairing-check host function. There is no code path that lets a transaction through without one.
+- **Progressive KYC** is enforced *inside the proof itself*, not as a separate check: a public signal `require_bvn` is set by the backend from the swap's naira value, and the contract's `confidential_swap` rejects any swap at or above the Tier-2 threshold whose proof didn't set that signal. The compliance attributes (`hardware_attested`, `bvn_verified`) are bound into the note commitment, so they can't be forged or replayed onto a different note.
+- **Double-spend / replay protection** is a nullifier set (`DataKey::Nullifier`) checked on-chain before any note-spending call succeeds — same mechanism `unshield`, `confidential_swap`, and `shielded_transfer` all share.
+- **Recipient-binding on unshield**: `unshield`'s public signals include `int_be(sha256(xdr(recipient))) mod r`, which the contract recomputes from the actual `Address` argument and rejects on mismatch. This closes a front-running class of bug where a compromised relayer could otherwise redirect a user's unshielded funds to a different address than the one they proved intent to withdraw to.
+
+See [Contracts, Circuits & SDK](/contracts-and-sdk) for the exact function signatures and circuit list.
+
+## 2. Backend hardening
+
+The cryptography above only matters if the plain Express layer in front of it can't be trivially abused. Three gaps were closed:
+
+### PIN brute-forcing
+
+`POST /kyc/verify-pin` and `POST /kyc/reissue-salt` check a short PIN (`scrypt` + constant-time compare — the hashing itself was always sound). What was missing was any limit on *how many times* someone could try. Now:
+
+- **Per-IP rate limiting** (`express-rate-limit`, 20 requests / 15 min) on both routes.
+- **Per-account lockout**, independent of IP: `User.failedPinAttempts` increments on each wrong guess; on the 5th, `User.pinLockedUntil` is set 15 minutes out, and both routes reject with `429` until it clears. This is the layer that actually matters — an attacker rotating IPs/proxies can't route around a lockout tied to the account itself.
+- Both counters reset to zero on a correct PIN.
+
+`reissue-salt` was the higher-stakes target: it's the login-recovery path that re-mints a user's compliance secret salt, so a successful PIN guess there was effectively an account-takeover primitive, not just a login nuisance.
+
+### The open bank-name oracle
+
+`POST /swap/resolve-account` does a Lenco name-enquiry — given any `accountNumber` + `bankCode`, it returns the real account holder's name, so users can confirm a payout destination before money moves. It had **no check that the caller was a ShieldPass user at all**, which meant anyone on the internet could script it to resolve real names off arbitrary Nigerian bank accounts, unrelated to this app. Now rate-limited (20 requests / 15 min per IP) — not a full fix for an inherently public lookup endpoint, but it closes off bulk enumeration.
+
+### CORS and headers
+
+- `cors()` previously accepted any origin. It's now driven by a `CORS_ORIGIN` env var (comma-separated allowlist); unset falls back to allow-all with a startup warning, so local dev isn't broken but production can — and should — lock it down.
+- `helmet()` is now applied globally for standard response headers.
+- A baseline global rate limit (600 requests / 15 min per IP) sits in front of every route as defense in depth.
+
+All of the above is skipped automatically when `NODE_ENV=test` so the backend's own test suite (29 tests covering KYC, PIN lockout, BVN, and compliance) isn't affected by the limits it's testing around.
+
+## What's intentionally out of scope (for now)
+
+This is IP/account-based throttling, not a full authentication layer — reasonable for a testnet hackathon submission, not yet what you'd want fronting real-fund custody. The `compliance_registry` contract from the original hackathon plan is dead code (superseded by compliance-inside-the-note) and isn't deployed.

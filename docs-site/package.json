@@ -5,28 +5,32 @@
   "scripts": {
     "dev": "next dev -p 5000",
     "build": "next build",
-    "postbuild": "pagefind --site out",
+    "postbuild": "pagefind --site .next/server/app --output-path public/_pagefind",
     "start": "next start -p 5000",
-    "lint": "eslint"
+    "lint": "eslint",
+    "postinstall": "node scripts/patch-simple-git.mjs"
   },
   "dependencies": {
     "@types/node": "^20.19.43",
-    "@types/react": "^19",
-    "@types/react-dom": "^19",
-    "next": "15.1.0",
+    "@types/react": "^18",
+    "@types/react-dom": "^18",
+    "next": "^15.1.6",
     "nextra": "^4.6.1",
     "nextra-theme-docs": "^4.6.1",
     "pagefind": "^1.5.2",
-    "react": "19.2.4",
-    "react-dom": "19.2.4",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
     "typescript": "^5"
   },
   "devDependencies": {
     "eslint": "^9",
-    "eslint-config-next": "15.1.0"
+    "eslint-config-next": "^15.1.6"
   },
   "optionalDependencies": {
     "@napi-rs/simple-git-linux-x64-gnu": "0.1.22",
     "@napi-rs/simple-git-linux-x64-musl": "0.1.22"
+  },
+  "overrides": {
+    "zod": "4.1.12"
   }
 }

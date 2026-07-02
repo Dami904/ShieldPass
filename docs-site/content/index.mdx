@@ -1,4 +1,8 @@
 <div align="center" style={{ margin: '3rem 0' }}>
+  <img src="/docs/assets/shieldpass_banner_1782226817707.png" alt="ShieldPass Banner" style={{ maxWidth: '100%' }} />
+</div>
+
+<div align="center" style={{ margin: '3rem 0' }}>
   <span className="nav-logo" style={{ fontSize: '3rem' }}>SHIELDPASS</span>
 </div>
 
@@ -12,7 +16,7 @@ Your crypto lives in a **Shielded Pool**, not a standard escrow. You prove owner
 > **Built for the _Stellar Hacks: ZK_ hackathon.** The ZK proof is *load-bearing*: no valid proof ⇒ no swap, no transfer, no payout. Verification happens **on Soroban itself**, not off-chain.
 
 <div align="left">
-  <code>Shielded Pool</code> • <code>On-chain Groth16 (BN254)</code> • <code>Private P2P Transfers</code> • <code>Zero-Storage Backend</code> • <code>Passkey Smart Wallets</code> • <code>Gasless</code>
+  <code>Shielded Pool</code> • <code>On-chain Groth16 (BN254)</code> • <code>Private P2P Transfers</code> • <code>Multi-Asset (XLM + USDC)</code> • <code>Zero-Storage Backend</code> • <code>Passkey Smart Wallets</code> • <code>Gasless</code>
 </div>
 
 ---
@@ -25,7 +29,7 @@ Traditional off-ramps force you to upload your identity, trust a custodian with 
 <div align="left"><img src="/docs/assets/shielded_pool_concept_1782226827446.png" alt="Shielded Pool Concept" width="384" /></div>
 
 * **Old Way:** When you sent money, everyone could see it sitting in an escrow account.
-* **New Way:** All user funds are mixed in one pool. Each balance is a secret **note** (`Poseidon(amount, owner, randomness, …)`) owned by your shielded key. Nobody scanning the chain can tell which note is yours.
+* **New Way:** All user funds of a given asset are mixed in one pool. Each balance is a secret **note** (`Poseidon(amount, owner, randomness, …)`) owned by your shielded key. Nobody scanning the chain can tell which note is yours. ShieldPass currently runs **two live pools — XLM and USDC** — each a separate contract instance (same audited wasm/circuits, bound to a different token at `init`).
 
 ### 2. On-Chain ZK Verification (No Trusted Verifier)
 * **Old Way:** Proofs were checked off-chain by a backend you had to trust.
@@ -59,7 +63,7 @@ Meet **Tobi**, who wants to use ShieldPass:
 
 **1. Onboard (invisible funding).** Tobi signs up with a Passkey (Face ID). His **shielded identity** (spending + encryption keys) is derived from the passkey itself. ShieldPass mints him a secret **note** worth 500 XLM — no public transaction happens. To the outside world, his wallet holds $0.
 
-**2. Shield / Unshield.** Tobi can move his own crypto **into** the private pool (Shield) or pull it back **out** to his wallet (Unshield) at any time.
+**2. Shield / Unshield.** Tobi can move his own crypto — **XLM or USDC** — **into** the private pool (Shield) or pull it back **out** to his wallet (Unshield) at any time.
 
 **3. Withdraw to Naira.** Tobi cashes out 100 XLM. On his phone a ZK proof spends his note, mints a 400 XLM change note, and authorizes the contract. The backend pays his bank via Paystack/Lenco; the change stays private.
 
@@ -143,7 +147,7 @@ No seed phrases, no extensions, no XLM required. Each user gets an **OpenZeppeli
 |---|---|
 | **ZK Circuits** | **Circom** + **snarkjs** Groth16, Poseidon (BN254) |
 | **On-chain verification** | Soroban native `bn254` pairing-check (Rust contract) |
-| **Smart Contract** | Rust / Soroban — Shielded Pool (deposit · insert · confidential_swap · unshield · shielded_transfer · claim · refund) |
+| **Smart Contract** | Rust / Soroban — Shielded Pool (deposit · insert · confidential_swap · unshield · shielded_transfer · claim · refund), one instance per supported asset |
 | **Note encryption** | x25519 + XChaCha20-Poly1305 (`@noble`) |
 | **Wallets** | OpenZeppelin **Smart Accounts** (WebAuthn passkeys / secp256r1) |
 | **Gasless Relay** | OpenZeppelin Channels |
@@ -156,8 +160,9 @@ No seed phrases, no extensions, no XLM required. Each user gets an **OpenZeppeli
 ## Deployment
 
 * **Network:** Stellar / Soroban **testnet**
-* **Shielded Pool contract:** [`CCSNB23PL3NFACTXI2U5GCQHI4ZG3CNYCPJDQLKTH4EVC6GZUXRKOKPD`](https://stellar.expert/explorer/testnet/contract/CCSNB23PL3NFACTXI2U5GCQHI4ZG3CNYCPJDQLKTH4EVC6GZUXRKOKPD)
-* **Pool token:** native XLM (its testnet SAC)
+* **XLM Shielded Pool:** [`CBHGVQ7UH4C47LFUYFFKZMRI7AYUQ4TGYNIKX37KFKGBFGECKQM7BEG5`](https://stellar.expert/explorer/testnet/contract/CBHGVQ7UH4C47LFUYFFKZMRI7AYUQ4TGYNIKX37KFKGBFGECKQM7BEG5) — token: native XLM SAC
+* **USDC Shielded Pool:** [`CCRQD3ALTYX5GMSQA5GDN65CF3DPLLHPWOOKHQOKRDO3JNK3FVYDM7ZP`](https://stellar.expert/explorer/testnet/contract/CCRQD3ALTYX5GMSQA5GDN65CF3DPLLHPWOOKHQOKRDO3JNK3FVYDM7ZP) — token: testnet USDC SAC
+* **Wallets:** OpenZeppelin smart-account-kit, shared pre-deployed account wasm + WebAuthn verifier on testnet (gasless submission via OpenZeppelin Channels)
 
 ---
 
@@ -194,14 +199,22 @@ Key environment variables:
 | File | Var | Purpose |
 |---|---|---|
 | `backend/.env` | `NEON_CONNECTION_STRING` | Neon Postgres direct URL (`?sslmode=require`, no `channel_binding`) |
-| `backend/.env` | `STELLAR_CONTRACT_ID` / `STELLAR_RELAYER_SECRET` | Shielded Pool contract id + the admin/relayer keypair |
+| `backend/.env` | `STELLAR_CONTRACT_ID` / `USDC_POOL_CONTRACT_ID` | XLM / USDC Shielded Pool contract ids |
+| `backend/.env` | `XLM_SAC_ADDRESS` / `USDC_SAC_ADDRESS` | Stellar Asset Contract addresses backing each pool |
+| `backend/.env` | `STELLAR_RELAYER_SECRET` | Admin/relayer keypair (pool init, faucet seeding) |
+| `backend/.env` | `CHANNELS_URL` / `CHANNELS_API_KEY` | OpenZeppelin Channels — required for gasless smart-account submission |
+| `backend/.env` | `CORS_ORIGIN` | Comma-separated allowed frontend origin(s); unset = allow all (dev only) |
 | `backend/.env` | `PAYSTACK_SECRET_KEY` / `LENCO_*` | Naira payout providers |
 | `backend/.env` | `FAUCET_NOTE_AMOUNT` / `FAUCET_NOTE_ASSET` | Onboarding seed note (defaults `500` / `XLM`) |
 | `frontend/.env` | `VITE_API_URL` | Backend URL (powers swaps, transfers, scanning, notifications) |
-| `frontend/.env` | `VITE_ESCROW_CONTRACT_ID` | The Shielded Pool contract id |
+| `frontend/.env` | `VITE_ACCOUNT_WASM_HASH` / `VITE_WEBAUTHN_VERIFIER_ADDRESS` | smart-account-kit account wasm + WebAuthn verifier contract |
+| `frontend/.env` | `VITE_XLM_POOL_CONTRACT_ID` / `VITE_USDC_POOL_CONTRACT_ID` | Per-asset Shielded Pool contract ids |
+| `frontend/.env` | `VITE_XLM_SAC` / `VITE_USDC_SAC` | Per-asset SAC addresses (drives which assets show up in the UI) |
+
+See the [Security](/security) page for the PIN-lockout, rate-limiting, and CORS details behind `CORS_ORIGIN`.
 
 ---
 
 ## License
 
-See [LICENSE](./LICENSE).
+MIT — see [LICENSE](https://github.com/Xyrelix/ShieldPass/blob/main/LICENSE) in the repository root.
