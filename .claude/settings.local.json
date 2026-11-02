@@ -28,7 +28,22 @@
       "Bash(cp build/groth16_fixtures.rs ../contracts/shielded_pool/src/test_fixtures.rs)",
       "Read(//mnt/c/Users/USER/contracts/shielded_pool/src/**)",
       "Bash(echo \"SDK exit: $?\")",
-      "Bash(echo \"backend exit: $?\")"
+      "Bash(echo \"backend exit: $?\")",
+      "Bash(npm install *)",
+      "Bash(git commit *)",
+      "Bash(git check-ignore *)",
+      "Bash(grep -n \"web3auth\" frontend/package.json)",
+      "Bash(ls frontend/node_modules/@web3auth)",
+      "Bash(grep -n \"jose\" backend/package.json)",
+      "Bash(ls node_modules/jose)",
+      "Bash(rm -f /tmp/w3a-install.log)",
+      "Bash(nohup npm install @web3auth/modal --workspace=shieldpass-frontend)",
+      "Bash(echo \"started pid $!\")",
+      "Bash(echo \"EXITCODE:$?\")",
+      "Bash(kill -9 20580 20600)",
+      "Bash(kill -9 28787 28809)",
+      "Bash(npm ls *)",
+      "Bash(kill -9 32833 32853)"
     ]
   }
 }
